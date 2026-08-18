@@ -1,0 +1,8 @@
+streamlit==1.56.0
+pandas
+numpy
+plotly
+pyarrow
+scipy
+backtesting
+optuna
