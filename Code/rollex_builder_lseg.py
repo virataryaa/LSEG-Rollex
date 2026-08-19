@@ -17,6 +17,7 @@ import argparse
 import calendar as cal_module
 import numpy as np
 import pandas as pd
+pd.set_option("future.no_silent_downcasting", True)  # silences a harmless lseg.data internal FutureWarning
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List
