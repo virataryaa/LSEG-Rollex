@@ -11,7 +11,7 @@ import pandas as pd
 from pathlib import Path
 
 TO_EMAIL = "virat.arya@etgworld.com"
-DB_DIR   = Path(r"C:\Users\virat.arya\ETG\SoftsDatabase - Documents\Database\Hardmine\Interim_Migration\Rollex\Database")
+DB_DIR   = Path(r"C:\Users\virat.arya\ETG\SoftsDatabase - Documents\Database\Hardmine\LSEG\Rollex\Database")
 COMMS    = ["KC", "RC", "CC", "SB", "CT", "LCC", "LSU"]
 
 status     = sys.argv[1] if len(sys.argv) > 1 else "ok"
@@ -55,7 +55,7 @@ def send_outlook_email(subject: str, body: str):
 
 ok  = status == "ok"
 tag = "[OK]" if ok else "[ERROR]"
-subject = f"{tag} Interim_Migration-Rollex (LSEG) — {today}"
+subject = f"{tag} LSEG-Rollex — {today}"
 
 git_line = {
     "pushed":  "GitHub  : Pushed successfully",
@@ -63,7 +63,7 @@ git_line = {
     "failed":  "GitHub  : PUSH FAILED",
 }.get(git_status, f"GitHub  : {git_status}")
 
-body = f"""Interim_Migration Rollex (LSEG) — Daily Update
+body = f"""LSEG Rollex — Daily Update
 Run time : {run_dt}
 Status   : {"OK" if ok else "ERROR — builder failed, check run_log.txt"}
 {git_line}
@@ -79,7 +79,7 @@ unchanged from the ICE source; c1/c2 come from LSEG continuation RICs
 cause small one-off return spikes on that day — this is a source data
 completeness characteristic, not a builder bug.
 
-Log: C:\\Users\\virat.arya\\ETG\\SoftsDatabase - Documents\\Database\\Hardmine\\Interim_Migration\\Rollex\\Automator\\run_log.txt
+Log: C:\\Users\\virat.arya\\ETG\\SoftsDatabase - Documents\\Database\\Hardmine\\LSEG\\Rollex\\Automator\\run_log.txt
 """
 
 print(body)

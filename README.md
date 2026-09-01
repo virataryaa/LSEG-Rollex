@@ -14,7 +14,7 @@ series for 7 ICE softs commodities (KC, RC, CC, LCC, SB, CT, LSU).
   agnostic pandas/numpy. Only the price fetch (`icepython` → `lseg.data`) and
   the c1/c2 RIC map were rewritten.
 - **`Database/`** — `rollex_{KC,RC,CC,SB,CT,LCC,LSU}.parquet`, full history
-  from 2010, also synced into the sibling `Interim_Migration/COT_ALL` project's
+  from 2010, also synced into the sibling `LSEG/COT_ALL` project's
   `Database/Rollex/` for its Dashboard's roll-adjusted-price tabs.
 - **`Dashboard/ICE_Rollex.py`** — copied verbatim from the ICE source (pure
   parquet consumer, no ICE dependency). Seasonality, Correlation, Indexed
