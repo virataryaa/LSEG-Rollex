@@ -243,13 +243,21 @@ def fetch_ohlc(symbol, start, end, ld, bday=None):
     freakishly large daily return, particularly damaging when a gap lands on
     or near a roll date."""
     try:
-        df = ld.get_history(universe=[symbol], fields=["OPEN_PRC", "HIGH_1", "LOW_1", "TRDPRC_1"],
+        # SETTLE, not TRDPRC_1 — TRDPRC_1 is a last-traded-price snapshot that
+        # keeps moving/correcting after a pull (confirmed against Eikon: a
+        # KCZ6 pull showed 289.95 while Eikon's own settled TRDPRC_1 table
+        # later read 291.30 for the same date). SETTLE is the official
+        # exchange settlement price, fixed once published — same fix already
+        # applied to LCC/RC option ingest (see Options/Code/lcc_ingest_lseg.py
+        # / lrc_ingest_lseg.py, which also found SETTLE more reliable than
+        # TRDPRC_1 on these continuation RICs).
+        df = ld.get_history(universe=[symbol], fields=["OPEN_PRC", "HIGH_1", "LOW_1", "SETTLE"],
                              start=start, end=end, interval="daily", count=10000)
         if df is None or df.empty:
             return pd.DataFrame(columns=["Open", "High", "Low", "settlement"])
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = [c[0] for c in df.columns]
-        df = df.rename(columns={"OPEN_PRC": "Open", "HIGH_1": "High", "LOW_1": "Low", "TRDPRC_1": "settlement"})
+        df = df.rename(columns={"OPEN_PRC": "Open", "HIGH_1": "High", "LOW_1": "Low", "SETTLE": "settlement"})
         df.index = pd.to_datetime(df.index).normalize()
         df.index.name = "Date"
         df = df[~df.index.duplicated(keep="last")].sort_index()
