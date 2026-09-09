@@ -31,10 +31,13 @@ def parquet_summary() -> str:
         df.index = pd.to_datetime(df.index)
         latest_px = df["rollex_px"].iloc[-1] if "rollex_px" in df.columns else float("nan")
         active    = df["active_label"].iloc[-1] if "active_label" in df.columns else "—"
+        # rollex_px is the SETTLE (official exchange settlement) price of the
+        # active contract, not a last-trade snapshot — labeled explicitly
+        # since that distinction was a real bug fixed on 2026-09-09.
         lines.append(
             f"  {comm:<6}  {len(df):>5} rows   "
             f"{df.index.min().date()} -> {df.index.max().date()}   "
-            f"px={latest_px:>9.2f}   active={active}"
+            f"settle={latest_px:>9.2f}   active={active}"
         )
     return "\n".join(lines)
 
