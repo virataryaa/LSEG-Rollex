@@ -352,9 +352,14 @@ def fetch_explicit_chain(engine_key, root_ric, fetch_start, end_date, ld, bday):
 
     fetch_start_ts = pd.Timestamp(fetch_start)
     end_ts         = pd.Timestamp(end_date)
-    # Pad one contract's worth either side so day-1 of the range still has
-    # a valid c1/c2 pair, and the final pre-expiry window is covered.
-    relevant = ct[(ct["LTD"] >= fetch_start_ts - pd.DateOffset(years=1)) &
+    # A contract can only ever be c1/c2 on day d if its LTD >= d — so nothing
+    # with LTD < fetch_start_ts is ever usable and doesn't need fetching. This
+    # is what makes incremental runs cheap for free: fetch_start is recent
+    # (last ~5 days) in incremental mode, so this alone collapses the chain
+    # down to just the currently-live contract(s), no separate "which
+    # contracts changed" tracking needed. Pad the upper bound one contract's
+    # worth so the final pre-expiry window still has a c2 to look ahead to.
+    relevant = ct[(ct["LTD"] >= fetch_start_ts) &
                   (ct["LTD"] <= end_ts + pd.DateOffset(years=1))]
 
     contract_frames = {}
