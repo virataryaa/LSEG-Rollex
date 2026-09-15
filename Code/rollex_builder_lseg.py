@@ -297,13 +297,23 @@ def resolve_explicit_contract(ric, fetch_start, end_date, ld, bday):
     "^N" suffix that has to be discovered against the live fetch, not derived
     by formula (same finding as futures_builder_lseg.py's resolve_and_fetch,
     confirmed again here: e.g. CTZ5 = Dec 2025 only resolves as "CTZ5^2").
-    Uses TRDPRC_1, not SETTLE — SETTLE returned 0 rows for these dated
-    contract RICs in testing, TRDPRC_1 did not.
+
+    Uses SETTLE. An earlier version of this function used TRDPRC_1 after a
+    test of SETTLE came back empty — that test used the WRONG ^N candidate
+    (^1 instead of the correct ^2), so the empty result was a resolution
+    miss, not a real field gap. Retested against the correct candidate:
+    SETTLE is consistently MORE complete than TRDPRC_1 on every contract
+    checked (e.g. CTH7: 617 rows on SETTLE vs 242 on TRDPRC_1, full
+    coverage through expiry vs cutting off ~2 weeks early). TRDPRC_1 had
+    been silently dropping the final ~1-2 weeks of trading before several
+    contracts' expiries, which meant those days were missing from the
+    stitched c1/c2 series entirely (no source data for either leg on
+    those dates) rather than merely imprecise.
     """
     for cand in (ric, f"{ric}^1", f"{ric}^2", f"{ric}^3"):
         try:
             raw = ld.get_history(universe=[cand],
-                                  fields=["OPEN_PRC", "HIGH_1", "LOW_1", "TRDPRC_1"],
+                                  fields=["OPEN_PRC", "HIGH_1", "LOW_1", "SETTLE"],
                                   start=fetch_start, end=end_date, interval="daily", count=10000)
         except Exception:
             continue
@@ -312,7 +322,7 @@ def resolve_explicit_contract(ric, fetch_start, end_date, ld, bday):
         if isinstance(raw.columns, pd.MultiIndex):
             raw.columns = [c[0] for c in raw.columns]
         raw = raw.rename(columns={"OPEN_PRC": "Open", "HIGH_1": "High",
-                                   "LOW_1": "Low", "TRDPRC_1": "settlement"})
+                                   "LOW_1": "Low", "SETTLE": "settlement"})
         raw.index = pd.to_datetime(raw.index).normalize()
         raw = raw[~raw.index.duplicated(keep="last")].sort_index()
         for col in ["Open", "High", "Low", "settlement"]:
