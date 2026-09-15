@@ -183,8 +183,13 @@ COMMODITY_CONFIG = {
         months=["H","K","N","U","Z"], month_num={"H":3,"K":5,"N":7,"U":9,"Z":12},
         calendar="US", fnd_rule=fnd_nth_bd_minus(nth=6, n=10), ltd_rule=ltd_last_bd_minus(11),
     ),
+    # October (V) excluded: too illiquid — c1/c2 continuation rolling into it
+    # produces noisy, non-representative prints. Roll goes Jul -> Dec directly.
+    # See fetch_explicit_chain(), used only for CT in main(), which sources
+    # c1/c2 from real per-contract RICs (never LSEG's generic CTc1/CTc2) so
+    # the excluded month never enters the price series either.
     "CT": CommodityConfig(
-        months=["H","K","N","V","Z"], month_num={"H":3,"K":5,"N":7,"V":10,"Z":12},
+        months=["H","K","N","Z"], month_num={"H":3,"K":5,"N":7,"Z":12},
         calendar="US", fnd_rule=fnd_first_bd_minus(5), ltd_rule=ltd_last_bd_minus(17),
     ),
     "SB": CommodityConfig(
@@ -282,6 +287,125 @@ def fetch_ohlc(symbol, start, end, ld, bday=None):
     except Exception as e:
         print(f"  ERROR fetching {symbol}: {e}")
         return pd.DataFrame(columns=["Open", "High", "Low", "settlement"])
+
+# ── EXPLICIT CONTRACT CHAIN (skips excluded months, e.g. CT's October) ──────
+
+def resolve_explicit_contract(ric, fetch_start, end_date, ld, bday):
+    """
+    Try the bare RIC then ^1/^2/^3 in turn — LSEG disambiguates repeat
+    occurrences of the same month-code+year-digit pair across decades with a
+    "^N" suffix that has to be discovered against the live fetch, not derived
+    by formula (same finding as futures_builder_lseg.py's resolve_and_fetch,
+    confirmed again here: e.g. CTZ5 = Dec 2025 only resolves as "CTZ5^2").
+    Uses TRDPRC_1, not SETTLE — SETTLE returned 0 rows for these dated
+    contract RICs in testing, TRDPRC_1 did not.
+    """
+    for cand in (ric, f"{ric}^1", f"{ric}^2", f"{ric}^3"):
+        try:
+            raw = ld.get_history(universe=[cand],
+                                  fields=["OPEN_PRC", "HIGH_1", "LOW_1", "TRDPRC_1"],
+                                  start=fetch_start, end=end_date, interval="daily", count=10000)
+        except Exception:
+            continue
+        if raw is None or raw.empty:
+            continue
+        if isinstance(raw.columns, pd.MultiIndex):
+            raw.columns = [c[0] for c in raw.columns]
+        raw = raw.rename(columns={"OPEN_PRC": "Open", "HIGH_1": "High",
+                                   "LOW_1": "Low", "TRDPRC_1": "settlement"})
+        raw.index = pd.to_datetime(raw.index).normalize()
+        raw = raw[~raw.index.duplicated(keep="last")].sort_index()
+        for col in ["Open", "High", "Low", "settlement"]:
+            if col not in raw.columns:
+                raw[col] = np.nan
+            raw[col] = pd.to_numeric(raw[col], errors="coerce")
+        raw = raw[raw["settlement"].notna() & (raw["settlement"] > 0)]
+        if raw.empty:
+            continue
+        full_idx = pd.date_range(start=raw.index.min(), end=raw.index.max(), freq=bday)
+        raw = raw.reindex(full_idx)
+        for col in ["Open", "High", "Low", "settlement"]:
+            raw[col] = raw[col].interpolate(method="linear", limit_area="inside")
+        raw.index.name = "Date"
+        raw = raw[raw["settlement"].notna() & (raw["settlement"] > 0)]
+        if not raw.empty:
+            return cand, raw
+    return None, None
+
+
+def fetch_explicit_chain(engine_key, root_ric, fetch_start, end_date, ld, bday):
+    """
+    Build true c1/c2 OHLC frames by stitching together each individual listed
+    contract's OWN price history (never a generic continuation RIC), so any
+    month excluded from COMMODITY_CONFIG[engine_key].months (e.g. CT's 'V')
+    never appears as front or second month.
+
+    For each business day, c1 = the not-yet-expired contract with the
+    nearest LTD, c2 = the next one — same definition load_expiry_dates/
+    generate_contract_table already use for regime windows, just applied
+    per-contract instead of trusting the vendor's own c1/c2 roll.
+    """
+    end_year = pd.Timestamp.today().year + 1
+    ct = generate_contract_table(engine_key, START_YEAR, end_year)
+    ct["LTD"] = pd.to_datetime(ct["LTD"]).dt.normalize()
+    ct = ct.sort_values("LTD").reset_index(drop=True)
+
+    fetch_start_ts = pd.Timestamp(fetch_start)
+    end_ts         = pd.Timestamp(end_date)
+    # Pad one contract's worth either side so day-1 of the range still has
+    # a valid c1/c2 pair, and the final pre-expiry window is covered.
+    relevant = ct[(ct["LTD"] >= fetch_start_ts - pd.DateOffset(years=1)) &
+                  (ct["LTD"] <= end_ts + pd.DateOffset(years=1))]
+
+    contract_frames = {}
+    for _, row in relevant.iterrows():
+        base_ric = f"{root_ric}{row['month']}{row['year'] % 10}"
+        # Bound the query tightly around THIS contract's own LTD (not the
+        # whole fetch_start..end_date range) — otherwise a repeat decade
+        # digit (e.g. "H9" = both 2009 and 2019) lets the ^N candidate
+        # search silently match the wrong decade's contract, since its data
+        # also happens to fall inside an overly wide window. Same bound as
+        # futures_builder_lseg.py's resolve_and_fetch (~1400 days back).
+        contract_start = max(fetch_start_ts, row["LTD"] - pd.Timedelta(days=1400))
+        contract_end   = min(end_ts, row["LTD"] + pd.Timedelta(days=5))
+        if contract_start > contract_end:
+            continue
+        resolved, df = resolve_explicit_contract(
+            base_ric, contract_start.strftime("%Y-%m-%d"), contract_end.strftime("%Y-%m-%d"), ld, bday)
+        if resolved:
+            contract_frames[row["LTD"]] = df
+            print(f"    {base_ric} -> {resolved}: {len(df)} rows "
+                  f"({df.index.min().date()} -> {df.index.max().date()})")
+        else:
+            print(f"    (no data for {base_ric}, LTD {row['LTD'].date()})")
+
+    if not contract_frames:
+        return pd.DataFrame(columns=["Open","High","Low","settlement"]), \
+               pd.DataFrame(columns=["Open","High","Low","settlement"])
+
+    idx = pd.date_range(start=fetch_start, end=end_date, freq=bday)
+    c1_recs, c2_recs = [], []
+    sorted_ltds = sorted(contract_frames.keys())
+    for d in idx:
+        active_ltds = [ltd for ltd in sorted_ltds if ltd >= d]
+        if len(active_ltds) < 2:
+            continue
+        f1, f2 = contract_frames[active_ltds[0]], contract_frames[active_ltds[1]]
+        if d in f1.index and d in f2.index:
+            c1_recs.append((d, *f1.loc[d, ["Open","High","Low","settlement"]]))
+            c2_recs.append((d, *f2.loc[d, ["Open","High","Low","settlement"]]))
+
+    cols = ["Date","Open","High","Low","settlement"]
+    c1_df = pd.DataFrame(c1_recs, columns=cols).set_index("Date")
+    c2_df = pd.DataFrame(c2_recs, columns=cols).set_index("Date")
+    return c1_df, c2_df
+
+
+# Commodities whose c1/c2 must be built from explicit per-contract RICs
+# instead of the vendor's generic continuation series (see COMMODITY_CONFIG
+# comment on CT for why).
+EXPLICIT_CHAIN_COMMODITIES = {"CT"}
+
 
 # ── EXPIRY DATES (unchanged) ────────────────────────────────────────────────
 
@@ -459,11 +583,51 @@ if __name__ == "__main__":
                 fetch_start = START_DATE
                 print(f"  Mode: FULL from {fetch_start}")
 
+            bday = BDAY_CAL[COMMODITY_CONFIG[cfg["engine_key"]].calendar]
+
+            if comm in EXPLICIT_CHAIN_COMMODITIES:
+                # Build from real per-contract RICs, skipping excluded
+                # months (e.g. CT's October) — see fetch_explicit_chain().
+                root_ric = cfg["c1"].replace("c1", "")
+                c1_new, c2_new = fetch_explicit_chain(
+                    cfg["engine_key"], root_ric, fetch_start, END_DATE, ld, bday)
+                c1_df, c2_df = c1_new, c2_new
+                for label, new_df in [("c1", c1_new), ("c2", c2_new)]:
+                    ohlc_cols = [f"{label}_open", f"{label}_high", f"{label}_low"]
+                    if existing is not None and all(c in existing.columns for c in ohlc_cols):
+                        hist = existing[[label] + ohlc_cols].copy()
+                        hist.columns = ["settlement", "Open", "High", "Low"]
+                        hist = hist[hist["settlement"] > 0]
+                        merged = pd.concat([hist, new_df])
+                        merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+                        if label == "c1":
+                            c1_df = merged
+                        else:
+                            c2_df = merged
+                final_rows = {"c1": len(c1_df), "c2": len(c2_df)}
+                print(f"  {root_ric} explicit chain (V excluded): "
+                      f"c1={final_rows['c1']} rows, c2={final_rows['c2']} rows")
+                if c1_df is None or c2_df is None or c1_df.empty or c2_df.empty:
+                    print(f"  Skipping {comm} — incomplete explicit-chain price data")
+                    continue
+                df_out = build_rollex(comm, c1_df, c2_df, expiries, regime_windows)
+                if df_out.empty:
+                    continue
+                print(f"  Tagging active contracts...")
+                tags   = build_tags(df_out.index.tolist(), df_out["A"].tolist(), cfg["engine_key"])
+                df_out = pd.concat([df_out, tags], axis=1)
+                df_out.index.name = "Date"
+                df_out.to_parquet(out_path)
+                results[comm] = df_out
+                print(f"  Saved -> {out_path.name}  |  {len(df_out)} rows  |  "
+                      f"Rollex Px: {df_out['rollex_px'].iat[-1]:.4f}  |  "
+                      f"Active: {df_out['active_label'].iat[-1]}")
+                continue
+
             c1_df = c2_df = None
             for label, sym in [("c1", cfg["c1"]), ("c2", cfg["c2"])]:
                 ohlc_cols = [f"{label}_open", f"{label}_high", f"{label}_low"]
                 try:
-                    bday = BDAY_CAL[COMMODITY_CONFIG[cfg["engine_key"]].calendar]
                     new_df = fetch_ohlc(sym, fetch_start, END_DATE, ld, bday=bday)
                     if existing is not None:
                         if all(c in existing.columns for c in ohlc_cols):
