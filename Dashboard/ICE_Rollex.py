@@ -128,11 +128,38 @@ with st.sidebar:
     min_d  = df_raw.index.min().date()
     max_d  = df_raw.index.max().date()
 
+    def _dates_to_slider() -> None:
+        """Push a manual Start/End edit back into the slider."""
+        s_, e_ = st.session_state.rx_ds, st.session_state.rx_de
+        if s_ > e_:
+            s_, e_ = e_, s_
+        st.session_state.rx_rng = (s_, e_)
+
+    # The slider owns "rx_rng"; the two date pickers mirror it via session
+    # state (keyed widgets ignore value= after first render).
+    if "rx_rng" not in st.session_state:
+        st.session_state.rx_rng = (max(pd.Timestamp("2015-01-01").date(), min_d), max_d)
+    s0, e0 = st.session_state.rx_rng
+    s0 = min(max(s0, min_d), max_d)
+    e0 = min(max(e0, min_d), max_d)
+    if s0 > e0:
+        s0, e0 = e0, s0
+    st.session_state.rx_rng = (s0, e0)
+    st.session_state.rx_ds  = s0
+    st.session_state.rx_de  = e0
+
     date_range = st.slider(
         "Date range",
         min_value=min_d, max_value=max_d,
-        value=(pd.Timestamp("2015-01-01").date(), max_d),
-        format="YYYY-MM-DD")
+        format="YYYY-MM-DD", key="rx_rng")
+    cal_l, cal_r = st.columns(2)
+    with cal_l:
+        st.date_input("Start", min_value=min_d, max_value=max_d,
+                      key="rx_ds", on_change=_dates_to_slider)
+    with cal_r:
+        st.date_input("End", min_value=min_d, max_value=max_d,
+                      key="rx_de", on_change=_dates_to_slider)
+    date_range = st.session_state.rx_rng
 
     st.markdown("<hr>", unsafe_allow_html=True)
     st.caption(
