@@ -14,7 +14,9 @@ import scipy.stats as stats
 # ── Data loading ──────────────────────────────────────────────────────────────
 DB_DIR = Path(__file__).resolve().parent.parent / "Database"
 
-AVAILABLE = ["KC", "RC", "CC", "LCC", "SB", "CT", "LSU"]
+FUTURES    = ["KC", "RC", "CC", "LCC", "SB", "CT", "LSU"]
+INDEX_KEYS = ["GSCI", "BCOM"]
+AVAILABLE  = FUTURES + INDEX_KEYS
 
 def load_rollex(comm: str) -> pd.DataFrame:
     path = DB_DIR / f"rollex_{comm}.parquet"
@@ -24,24 +26,22 @@ def load_rollex(comm: str) -> pd.DataFrame:
     return df.sort_index()
 
 # Headline benchmark indices (S&P GSCI / Bloomberg Commodity Index) — built
-# by index_gsci_bcom_lseg.py. Correlation-tab only: these are single daily
-# levels with no roll/contract structure, so they don't fit the Seasonality /
-# Price & Vol / Return Distribution tabs, which expect the Rollex OHLC schema.
-INDEX_NAMES = {
-    "GSCI": "GSCI — S&P GSCI",
-    "BCOM": "BCOM — Bloomberg Commodity Index",
-}
-INDEX_COLORS = {"GSCI": "#6b7280", "BCOM": "#b45309"}
-INDEX_FILE   = DB_DIR / "index_gsci_bcom.parquet"
+# by index_gsci_bcom_lseg.py. Every tab here only ever touches rollex_px /
+# rollex_ret, so these slot in everywhere the 7 softs do (sidebar commodity
+# picker, Correlation, Indexed Performance, etc). They just don't have an
+# OHLC/roll-contract schema, which no tab actually needs.
+INDEX_FILE = DB_DIR / "index_gsci_bcom.parquet"
 
 def load_index(name: str) -> pd.DataFrame:
     """Returns a frame shaped like load_rollex()'s essentials (rollex_px /
-    rollex_ret) so it can sit alongside the futures data in the Correlation
-    tab's existing code."""
+    rollex_ret) so it can sit alongside the futures data everywhere else."""
     raw = pd.read_parquet(INDEX_FILE)
     raw.index = pd.to_datetime(raw.index)
     raw.index.name = "Date"
     return pd.DataFrame({"rollex_px": raw[name], "rollex_ret": raw[f"{name}_ret"]}).sort_index()
+
+def load_comm(comm: str) -> pd.DataFrame:
+    return load_index(comm) if comm in INDEX_KEYS else load_rollex(comm)
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Rollex Dashboard", layout="wide",
@@ -54,10 +54,28 @@ st.markdown("""<style>
   hr{border:none!important;border-top:1px solid #e8e8ed!important;margin:.3rem 0!important}
   .stDataFrame{font-size:.75rem}
   [data-testid="stSidebar"]{background:#f0f2f8!important}
-  .stTabs [data-baseweb="tab-list"]{gap:4px}
-  .stTabs [data-baseweb="tab"]{background:#f0f2f8;border-radius:6px 6px 0 0;
-    padding:6px 18px;font-size:.8rem;font-weight:600;color:#444}
-  .stTabs [aria-selected="true"]{background:#0a2463!important;color:#fff!important}
+
+  /* Pill-style tab nav (same look as the COT dashboard's segmented nav) */
+  .stTabs [data-baseweb="tab-list"]{
+    gap:4px; padding:4px; background:#f1f3f7; border:1px solid #e3e7ee;
+    border-radius:999px; display:inline-flex; width:fit-content;
+  }
+  .stTabs [data-baseweb="tab"]{
+    background:transparent!important; border:none!important; border-radius:999px!important;
+    margin:0!important; padding:.5rem 1.25rem!important; min-height:0!important;
+    box-shadow:none!important; transition:background .15s ease, color .15s ease;
+  }
+  .stTabs [data-baseweb="tab"] p{
+    font-size:.84rem!important; font-weight:600!important; letter-spacing:.02em;
+    color:#5b6472!important;
+  }
+  .stTabs [data-baseweb="tab"]:hover{background:#e6e9f0!important}
+  .stTabs [aria-selected="true"]{
+    background:#0a2463!important; box-shadow:0 1px 3px rgba(0,0,0,.18)!important;
+  }
+  .stTabs [aria-selected="true"] p{color:#ffffff!important}
+  .stTabs [data-baseweb="tab-highlight"]{background:transparent!important}
+  .stTabs [data-baseweb="tab-border"]{background:transparent!important}
 </style>""", unsafe_allow_html=True)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -68,23 +86,27 @@ DRED  = "#c0392b"
 AMBER = "#e8a020"
 
 COMM_COLORS = {
-    "KC":  "#0a2463",
-    "RC":  "#8b1a00",
-    "CC":  "#e8a020",
-    "LCC": "#4a7fb5",
-    "SB":  "#1a7a1a",
-    "CT":  "#7b2d8b",
-    "LSU": "#c0553a",
+    "KC":   "#0a2463",
+    "RC":   "#8b1a00",
+    "CC":   "#e8a020",
+    "LCC":  "#4a7fb5",
+    "SB":   "#1a7a1a",
+    "CT":   "#7b2d8b",
+    "LSU":  "#c0553a",
+    "GSCI": "#6b7280",
+    "BCOM": "#b45309",
 }
 
 COMM_NAMES = {
-    "KC":  "KC — Arabica",
-    "RC":  "RC — Robusta",
-    "CC":  "CC — Cocoa (ICE)",
-    "LCC": "LCC — Cocoa (Liffe)",
-    "SB":  "SB — Sugar #11",
-    "CT":  "CT — Cotton",
-    "LSU": "LSU — White Sugar",
+    "KC":   "KC — Arabica",
+    "RC":   "RC — Robusta",
+    "CC":   "CC — Cocoa (ICE)",
+    "LCC":  "LCC — Cocoa (Liffe)",
+    "SB":   "SB — Sugar #11",
+    "CT":   "CT — Cotton",
+    "LSU":  "LSU — White Sugar",
+    "GSCI": "GSCI — S&P GSCI",
+    "BCOM": "BCOM — Bloomberg Commodity",
 }
 
 _D = dict(
@@ -117,7 +139,7 @@ def kpi(label, val, sub=None, color=NAVY):
 
 @st.cache_data(ttl=600)
 def get_data(comm: str) -> pd.DataFrame:
-    return load_rollex(comm)
+    return load_comm(comm)
 
 
 @st.cache_data(ttl=600)
@@ -125,18 +147,7 @@ def get_all_data() -> dict:
     out = {}
     for c in AVAILABLE:
         try:
-            out[c] = load_rollex(c)
-        except Exception:
-            pass
-    return out
-
-
-@st.cache_data(ttl=600)
-def get_index_data() -> dict:
-    out = {}
-    for c in INDEX_NAMES:
-        try:
-            out[c] = load_index(c)
+            out[c] = load_comm(c)
         except Exception:
             pass
     return out
@@ -193,8 +204,9 @@ with st.sidebar:
     date_range = st.session_state.rx_rng
 
     st.markdown("<hr>", unsafe_allow_html=True)
+    _roll_line = "Roll offset: 20 trading days\n\n" if sel_comm not in INDEX_KEYS else "Headline index — no roll\n\n"
     st.caption(
-        f"Roll offset: 20 trading days\n\n"
+        f"{_roll_line}"
         f"Source: LSEG (interim)\n\n"
         f"Data as of {max_d.strftime('%d/%m/%Y')}")
 
@@ -356,23 +368,17 @@ with tab_season:
 with tab_corr:
     st.markdown(lbl("Pairwise Correlation"), unsafe_allow_html=True)
 
-    # Futures + the two headline benchmark indices, Correlation tab only.
-    index_data  = get_index_data()
-    corr_data   = {**all_data, **index_data}
-    corr_names  = {**COMM_NAMES, **INDEX_NAMES}
-    corr_opts   = AVAILABLE + [c for c in INDEX_NAMES if c in index_data]
-
     corr_cols = st.columns([1, 1, 4])
     with corr_cols[0]:
-        pair_a = st.selectbox("Commodity A", corr_opts,
-                              index=0, format_func=lambda x: corr_names[x], key="pair_a")
+        pair_a = st.selectbox("Commodity A", AVAILABLE,
+                              index=0, format_func=lambda x: COMM_NAMES[x], key="pair_a")
     with corr_cols[1]:
-        pair_b = st.selectbox("Commodity B", corr_opts,
-                              index=1, format_func=lambda x: corr_names[x], key="pair_b")
+        pair_b = st.selectbox("Commodity B", AVAILABLE,
+                              index=1, format_func=lambda x: COMM_NAMES[x], key="pair_b")
 
-    if pair_a != pair_b and pair_a in corr_data and pair_b in corr_data:
-        da = corr_data[pair_a].loc[str(date_range[0]):str(date_range[1])]
-        db = corr_data[pair_b].loc[str(date_range[0]):str(date_range[1])]
+    if pair_a != pair_b and pair_a in all_data and pair_b in all_data:
+        da = all_data[pair_a].loc[str(date_range[0]):str(date_range[1])]
+        db = all_data[pair_b].loc[str(date_range[0]):str(date_range[1])]
 
         ret_a = da["rollex_ret"].dropna() * 100
         ret_b = db["rollex_ret"].dropna() * 100
@@ -406,8 +412,8 @@ with tab_corr:
                 fig_sc1.add_trace(go.Scatter(
                     x=ret_a, y=ret_b, mode="markers",
                     marker=dict(color=NAVY, size=4, opacity=0.35),
-                    hovertemplate=f"{corr_names[pair_a]}: %{{x:.2f}}%<br>"
-                                  f"{corr_names[pair_b]}: %{{y:.2f}}%<extra></extra>",
+                    hovertemplate=f"{COMM_NAMES[pair_a]}: %{{x:.2f}}%<br>"
+                                  f"{COMM_NAMES[pair_b]}: %{{y:.2f}}%<extra></extra>",
                     name="Daily returns"))
                 fig_sc1.add_trace(go.Scatter(
                     x=x_line, y=m_ret * x_line + b_ret,
@@ -477,14 +483,14 @@ with tab_corr:
     st.markdown(lbl("Return Correlation Matrix — All Commodities", NAVY),
                 unsafe_allow_html=True)
 
-    avail_comms = [c for c in corr_opts if c in corr_data]
+    avail_comms = [c for c in AVAILABLE if c in all_data]
     ret_matrix  = pd.DataFrame({
-        c: corr_data[c].loc[str(date_range[0]):str(date_range[1])]["rollex_ret"]
+        c: all_data[c].loc[str(date_range[0]):str(date_range[1])]["rollex_ret"]
         for c in avail_comms
     }).dropna()
 
     corr_matrix = ret_matrix.corr()
-    labels      = [corr_names[c].split("—")[0].strip() for c in avail_comms]
+    labels      = [COMM_NAMES[c].split("—")[0].strip() for c in avail_comms]
 
     # Mask diagonal — set to None so cells render blank
     arr = corr_matrix.to_numpy(dtype=float, copy=True)
@@ -564,7 +570,8 @@ with tab_idx:
 # TAB 4: Price & Vol
 # =============================================================================
 with tab_pv:
-    st.markdown(lbl(f"{COMM_NAMES[sel_comm]} — Rollex Price & Rolling Volatility"),
+    _px_lbl = "Index Level" if sel_comm in INDEX_KEYS else "Rollex Price"
+    st.markdown(lbl(f"{COMM_NAMES[sel_comm]} — {_px_lbl} & Rolling Volatility"),
                 unsafe_allow_html=True)
 
     df["vol20"] = df["rollex_ret"].rolling(20).std() * np.sqrt(252) * 100
@@ -576,7 +583,7 @@ with tab_pv:
     fig_px = make_subplots(specs=[[{"secondary_y": True}]])
     fig_px.add_trace(go.Scatter(
         x=df.index, y=df["rollex_px"],
-        name="Rollex Px", mode="lines",
+        name=_px_lbl, mode="lines",
         line=dict(color=COMM_COLORS.get(sel_comm, NAVY), width=2),
         fill="tozeroy", fillcolor="rgba(10,36,99,0.07)",
         customdata=active_labels,
