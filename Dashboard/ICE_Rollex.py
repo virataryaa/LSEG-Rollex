@@ -23,6 +23,26 @@ def load_rollex(comm: str) -> pd.DataFrame:
     df.index.name = "Date"
     return df.sort_index()
 
+# Headline benchmark indices (S&P GSCI / Bloomberg Commodity Index) — built
+# by index_gsci_bcom_lseg.py. Correlation-tab only: these are single daily
+# levels with no roll/contract structure, so they don't fit the Seasonality /
+# Price & Vol / Return Distribution tabs, which expect the Rollex OHLC schema.
+INDEX_NAMES = {
+    "GSCI": "GSCI — S&P GSCI",
+    "BCOM": "BCOM — Bloomberg Commodity Index",
+}
+INDEX_COLORS = {"GSCI": "#6b7280", "BCOM": "#b45309"}
+INDEX_FILE   = DB_DIR / "index_gsci_bcom.parquet"
+
+def load_index(name: str) -> pd.DataFrame:
+    """Returns a frame shaped like load_rollex()'s essentials (rollex_px /
+    rollex_ret) so it can sit alongside the futures data in the Correlation
+    tab's existing code."""
+    raw = pd.read_parquet(INDEX_FILE)
+    raw.index = pd.to_datetime(raw.index)
+    raw.index.name = "Date"
+    return pd.DataFrame({"rollex_px": raw[name], "rollex_ret": raw[f"{name}_ret"]}).sort_index()
+
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Rollex Dashboard", layout="wide",
                    initial_sidebar_state="expanded")
@@ -106,6 +126,17 @@ def get_all_data() -> dict:
     for c in AVAILABLE:
         try:
             out[c] = load_rollex(c)
+        except Exception:
+            pass
+    return out
+
+
+@st.cache_data(ttl=600)
+def get_index_data() -> dict:
+    out = {}
+    for c in INDEX_NAMES:
+        try:
+            out[c] = load_index(c)
         except Exception:
             pass
     return out
@@ -325,17 +356,23 @@ with tab_season:
 with tab_corr:
     st.markdown(lbl("Pairwise Correlation"), unsafe_allow_html=True)
 
+    # Futures + the two headline benchmark indices, Correlation tab only.
+    index_data  = get_index_data()
+    corr_data   = {**all_data, **index_data}
+    corr_names  = {**COMM_NAMES, **INDEX_NAMES}
+    corr_opts   = AVAILABLE + [c for c in INDEX_NAMES if c in index_data]
+
     corr_cols = st.columns([1, 1, 4])
     with corr_cols[0]:
-        pair_a = st.selectbox("Commodity A", AVAILABLE,
-                              index=0, format_func=lambda x: COMM_NAMES[x], key="pair_a")
+        pair_a = st.selectbox("Commodity A", corr_opts,
+                              index=0, format_func=lambda x: corr_names[x], key="pair_a")
     with corr_cols[1]:
-        pair_b = st.selectbox("Commodity B", AVAILABLE,
-                              index=1, format_func=lambda x: COMM_NAMES[x], key="pair_b")
+        pair_b = st.selectbox("Commodity B", corr_opts,
+                              index=1, format_func=lambda x: corr_names[x], key="pair_b")
 
-    if pair_a != pair_b and pair_a in all_data and pair_b in all_data:
-        da = all_data[pair_a].loc[str(date_range[0]):str(date_range[1])]
-        db = all_data[pair_b].loc[str(date_range[0]):str(date_range[1])]
+    if pair_a != pair_b and pair_a in corr_data and pair_b in corr_data:
+        da = corr_data[pair_a].loc[str(date_range[0]):str(date_range[1])]
+        db = corr_data[pair_b].loc[str(date_range[0]):str(date_range[1])]
 
         ret_a = da["rollex_ret"].dropna() * 100
         ret_b = db["rollex_ret"].dropna() * 100
@@ -369,8 +406,8 @@ with tab_corr:
                 fig_sc1.add_trace(go.Scatter(
                     x=ret_a, y=ret_b, mode="markers",
                     marker=dict(color=NAVY, size=4, opacity=0.35),
-                    hovertemplate=f"{COMM_NAMES[pair_a]}: %{{x:.2f}}%<br>"
-                                  f"{COMM_NAMES[pair_b]}: %{{y:.2f}}%<extra></extra>",
+                    hovertemplate=f"{corr_names[pair_a]}: %{{x:.2f}}%<br>"
+                                  f"{corr_names[pair_b]}: %{{y:.2f}}%<extra></extra>",
                     name="Daily returns"))
                 fig_sc1.add_trace(go.Scatter(
                     x=x_line, y=m_ret * x_line + b_ret,
@@ -440,14 +477,14 @@ with tab_corr:
     st.markdown(lbl("Return Correlation Matrix — All Commodities", NAVY),
                 unsafe_allow_html=True)
 
-    avail_comms = [c for c in AVAILABLE if c in all_data]
+    avail_comms = [c for c in corr_opts if c in corr_data]
     ret_matrix  = pd.DataFrame({
-        c: all_data[c].loc[str(date_range[0]):str(date_range[1])]["rollex_ret"]
+        c: corr_data[c].loc[str(date_range[0]):str(date_range[1])]["rollex_ret"]
         for c in avail_comms
     }).dropna()
 
     corr_matrix = ret_matrix.corr()
-    labels      = [COMM_NAMES[c].split("—")[0].strip() for c in avail_comms]
+    labels      = [corr_names[c].split("—")[0].strip() for c in avail_comms]
 
     # Mask diagonal — set to None so cells render blank
     arr = corr_matrix.to_numpy(dtype=float, copy=True)
@@ -585,28 +622,7 @@ with tab_dist:
     latest_lr = np.log1p(latest_ret) * 100
     z_lr      = (latest_lr - mu) / sigma if sigma > 0 else 0
 
-    # stats sidebar metrics
-    skew_v  = float(stats.skew(log_rets))
-    kurt_v  = float(stats.kurtosis(log_rets))         # excess kurtosis
-    _, p_jb = stats.jarque_bera(log_rets)
-
-    m1, m2, m3, m4, m5 = st.columns(5)
-    def _stat(col, label, val, color=NAVY):
-        col.markdown(
-            f"<div style='background:#f0f2f8;border-radius:8px;padding:8px 14px'>"
-            f"<div style='font-size:.58rem;color:#6e6e73;text-transform:uppercase;"
-            f"letter-spacing:.1em'>{label}</div>"
-            f"<div style='font-size:.95rem;font-weight:700;color:{color}'>{val}</div>"
-            f"</div>", unsafe_allow_html=True)
-
     z_col = DRED if abs(z_lr) > 2 else AMBER if abs(z_lr) > 1 else GREEN
-    _stat(m1, "Latest Return", f"{latest_lr:+.2f}%")
-    _stat(m2, "Z-Score",       f"{z_lr:+.2f}σ", color=z_col)
-    _stat(m3, "Skewness",      f"{skew_v:+.3f}")
-    _stat(m4, "Excess Kurtosis", f"{kurt_v:+.3f}")
-    _stat(m5, "Jarque-Bera p", f"{p_jb:.4f}", color=DRED if p_jb < 0.05 else GREEN)
-
-    st.markdown("<div style='margin:10px 0'></div>", unsafe_allow_html=True)
 
     # histogram + normal fit
     x_range   = np.linspace(log_rets.min(), log_rets.max(), 400)
