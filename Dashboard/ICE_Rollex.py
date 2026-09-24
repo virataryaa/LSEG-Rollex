@@ -57,7 +57,7 @@ st.markdown("""<style>
 
   /* Pill-style tab nav (same look as the COT dashboard's segmented nav) */
   .stTabs [data-baseweb="tab-list"]{
-    gap:4px; padding:4px; background:#f1f3f7; border:1px solid #e3e7ee;
+    gap:4px; padding:4px; background:#eef0f6; border:none;
     border-radius:999px; display:inline-flex; width:fit-content;
   }
   .stTabs [data-baseweb="tab"]{
@@ -76,6 +76,8 @@ st.markdown("""<style>
   .stTabs [aria-selected="true"] p{color:#ffffff!important}
   .stTabs [data-baseweb="tab-highlight"]{background:transparent!important}
   .stTabs [data-baseweb="tab-border"]{background:transparent!important}
+  .sb-title { font-family:'Fraunces', Georgia, serif; font-size:1.5rem; font-weight:600; color:#0a2463; margin-bottom:2px; }
+  .sb-caption { font-size:11px; color:#7a86a8; margin-bottom:16px; line-height:1.4; }
 </style>""", unsafe_allow_html=True)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -155,6 +157,7 @@ def get_all_data() -> dict:
 
 # ── Sidebar — Filters ─────────────────────────────────────────────────────────
 with st.sidebar:
+    st.markdown("<div class='sb-title'>Rollex</div><div class='sb-caption'>Roll-adjusted continuous futures across the soft commodities.</div>", unsafe_allow_html=True)
     st.markdown(
         "<div style='font-size:.9rem;font-weight:700;color:#0a2463;"
         "margin-bottom:12px;letter-spacing:.05em'>ROLLEX FILTERS</div>",
